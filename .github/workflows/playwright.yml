@@ -77,6 +77,17 @@ jobs:
             python ci/export_goldens.py --from "$GOLDEN_DIR" --to tests
           fi
 
+      - name: Copy fixture files alongside specs
+        # AI-generated specs frequently import sibling modules like ./test-data
+        # or read sibling files like ./user.json. We ship stubs in ci/fixtures/
+        # so the specs at least resolve their imports in CI.
+        run: |
+          if [ -d ci/fixtures ]; then
+            cp -v ci/fixtures/* tests/
+          else
+            echo "ci/fixtures/ not present — skipping fixture copy"
+          fi
+
       - name: List exported specs
         run: ls -la tests/
 
