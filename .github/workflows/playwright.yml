@@ -109,6 +109,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Copy root fixtures
+        run: |
+          if [ -f ci/fixtures/user.json ]; then
+            cp -v ci/fixtures/user.json .
+          fi
+
       - name: Download exported tests
         uses: actions/download-artifact@v7
         with:
