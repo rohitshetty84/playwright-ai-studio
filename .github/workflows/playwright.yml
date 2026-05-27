@@ -150,6 +150,25 @@ jobs:
 
       - name: Run Playwright
         run: npx playwright test --reporter=list,html,json,junit
+        continue-on-error: true
+
+      - name: Debug - Check what was created
+        if: always()
+        run: |
+          echo "=== Root directory ==="
+          ls -la | grep -E "results|test|playwright"
+
+          echo ""
+          echo "=== Looking for results.json ==="
+          find . -name "results.json" -type f 2>/dev/null || echo "Not found"
+
+          echo ""
+          echo "=== Checking junit.xml ==="
+          if [ -f junit.xml ]; then
+            echo "✓ junit.xml found, size: $(wc -c < junit.xml) bytes"
+          else
+            echo "❌ junit.xml not found"
+          fi
 
       - name: Upload Playwright report
         if: always()
