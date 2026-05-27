@@ -86,61 +86,6 @@ def ts_now():
 def save(directory, id_, data):
     (directory / f"{id_}.json").write_text(json.dumps(data, indent=2))
 
-# ── Seed golden ───────────────────────────────────────────────────────────────
-g_id = "seed-g1"
-golden = {
-    "id": g_id,
-    "name": "onboarding.spec.ts",
-    "description": "SF Onboarding — Path A (update & submit) and Path B (nudge & share) candidate workflows",
-    "code": ONBOARDING_SPEC,
-    "browsers": ["msedge"],
-    "analysis": {
-        "steps": ["Login via SSO", "Navigate to Onboarding", "Search candidate", "Select queue", "Filter & open profile", "Update National ID", "Set email Is Primary = No", "Set Work Schedule + Contract End Date", "Submit"],
-        "selectors": ["getByRole('button', { name: 'Home' }).first()", "getByRole('textbox', { name: 'New Recruit:' })", "getByRole('combobox', { name: 'Work Schedule' })", "getByRole('button', { name: /nudge/i })"],
-        "risks": ["Two Home buttons in shell bar", "Dynamic nudge button selector", "Network idle timing on SF pages", "Work Schedule combobox arrow targeting"],
-        "healingStrategies": [".first() on ambiguous role matches", ".or() fallback chain for Nudge", "waitForLoadState('networkidle') after queue select", "regex patterns for version-agnostic step labels"],
-    },
-    "createdAt": "2026-05-22 09:14",
-    "healCount": 0,
-    "lastHealed": None,
-    "status": "active",
-    "steps": 9,
-}
-save(GOLDEN_DIR, g_id, golden)
-print(f"✓ Golden seeded: {g_id}")
+# Onboarding golden seeding removed per user request. Only navigate-to-wikipediaorg goldens will be present.
+print("Onboarding seeding disabled. No action taken.")
 
-# ── Seed run 1 (partial failure) ──────────────────────────────────────────────
-r1_id = "seed-r1"
-run1 = {
-    "id": r1_id,
-    "goldenId": g_id,
-    "goldenName": "onboarding.spec.ts",
-    "browser": "msedge",
-    "runAt": "2026-05-27 08:03",
-    "candidates": [
-        {"name": "Rosa Philp",      "path": "A", "status": "pass", "duration": "48.2s"},
-        {"name": "Jeremy Armstead", "path": "A", "status": "pass", "duration": "51.7s"},
-        {"name": "Test Onb123",     "path": "B", "status": "fail", "duration": "12.1s",
-         "error": "TimeoutError: Locator getByRole('button', { name: /nudge/i }) — element not found after 15000ms. Possible selector drift on Nudge dialog."},
-    ],
-}
-save(RUNS_DIR, r1_id, run1)
-print(f"✓ Run seeded:   {r1_id} (1 failure)")
-
-# ── Seed run 2 (all pass) ─────────────────────────────────────────────────────
-r2_id = "seed-r2"
-run2 = {
-    "id": r2_id,
-    "goldenId": g_id,
-    "goldenName": "onboarding.spec.ts",
-    "browser": "msedge",
-    "runAt": "2026-05-26 14:22",
-    "candidates": [
-        {"name": "Rosa Philp",      "path": "A", "status": "pass", "duration": "45.9s"},
-        {"name": "Jeremy Armstead", "path": "A", "status": "pass", "duration": "49.3s"},
-        {"name": "Test Onb123",     "path": "B", "status": "pass", "duration": "22.4s"},
-    ],
-}
-save(RUNS_DIR, r2_id, run2)
-print(f"✓ Run seeded:   {r2_id} (all pass)")
-print("\nDone. Start the server with:  python server.py")
