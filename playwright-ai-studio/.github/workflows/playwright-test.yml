@@ -1,0 +1,77 @@
+name: Playwright Golden Test Run
+
+# ── Trigger only via workflow_dispatch (from Studio UI) ──────────────────────
+on:
+  workflow_dispatch:
+    inputs:
+      golden_name:
+        description: 'Golden test name to run'
+        required: true
+        type: string
+      golden_id:
+        description: 'Golden test ID'
+        required: true
+        type: string
+
+jobs:
+  playwright-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps msedge
+
+      - name: Run specific golden test
+        id: test
+        run: |
+          echo "Running golden: ${{ inputs.golden_name }}"
+          npx playwright test --grep "${{ inputs.golden_name }}" --reporter=list,html,json,junit
+        continue-on-error: true
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ inputs.golden_id }}
+          path: playwright-report/
+          retention-days: 7
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ inputs.golden_id }}
+          path: |
+            test-results/
+            blob-report/
+          retention-days: 7
+
+      - name: Publish HTML Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report-${{ inputs.golden_id }}
+          path: playwright-report/index.html
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "✅ Test completed for: ${{ inputs.golden_name }}"
+          echo "📊 Results available in artifacts"
+
+      - name: Exit with test status
+        if: steps.test.outcome == 'failure'
+        run: exit 1

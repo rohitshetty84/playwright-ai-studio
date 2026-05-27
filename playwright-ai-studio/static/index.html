@@ -510,6 +510,9 @@ function renderGoldens() {
       <div class="golden-body">
         ${g.code ? codeBlock(g.code, 'golden-code-'+g.id) : '<div style="color:var(--text2);font-size:12px">Code not stored — re-synthesize to populate.</div>'}
         <div class="locked-notice">🔒 Golden is locked. Go to Auto-Heal to modify.</div>
+        <div class="row mt-12">
+          <button class="btn btn-primary btn-sm" onclick="runGoldenInCI('${g.id}', '${esc(g.name)}')">▶ Run in CI</button>
+        </div>
       </div>
     </div>`).join('');
 }
@@ -689,6 +692,18 @@ function switchTab(tab) {
   });
   document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-'+tab));
   if (tab === 'heal') populateHealSelects();
+}
+
+// ── Trigger CI run ──────────────────────────────────────────────────────────
+async function runGoldenInCI(goldenId, goldenName) {
+  try {
+    const response = await api('POST', '/trigger-ci/' + goldenId);
+    toast('✓ CI workflow triggered: ' + goldenName);
+    console.log('CI triggered:', response);
+  } catch (e) {
+    toast('✗ Failed to trigger CI: ' + e.message);
+    console.error('CI trigger error:', e);
+  }
 }
 
 boot();

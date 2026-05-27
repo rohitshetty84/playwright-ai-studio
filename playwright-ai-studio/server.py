@@ -7,6 +7,7 @@ import os, json, uuid, re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import requests
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -268,6 +269,56 @@ async def promote_healed(golden_id: str, body: dict):
     golden["lastHealed"] = ts_now()
     save_json(GOLDEN_DIR, golden_id, golden)
     return golden
+
+# ─ Trigger CI run ──────────────────────────────────────────────────────────────
+@app.post("/api/trigger-ci/{golden_id}")
+async def trigger_ci(golden_id: str):
+    """Trigger a GitHub Actions workflow for a specific golden test"""
+    golden = next((g for g in load_goldens() if g["id"] == golden_id), None)
+    if not golden:
+        raise HTTPException(status_code=404, detail="Golden not found")
+
+    gh_token = os.getenv("GITHUB_TOKEN")
+    gh_owner = os.getenv("GITHUB_OWNER")
+    gh_repo = os.getenv("GITHUB_REPO")
+    gh_workflow = os.getenv("GITHUB_WORKFLOW", "playwright-test.yml")
+    gh_branch = os.getenv("GITHUB_BRANCH", "main")
+
+    if not all([gh_token, gh_owner, gh_repo]):
+        raise HTTPException(
+            status_code=500,
+            detail="GitHub credentials not configured in .env (GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO)"
+        )
+
+    try:
+        url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/actions/workflows/{gh_workflow}/dispatches"
+        headers = {
+            "Authorization": f"token {gh_token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        payload = {
+            "ref": gh_branch,
+            "inputs": {
+                "golden_name": golden["name"],
+                "golden_id": golden_id,
+            }
+        }
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
+
+        if response.status_code == 204:
+            return {
+                "status": "success",
+                "message": f"CI workflow triggered for {golden['name']}",
+                "golden_id": golden_id,
+                "golden_name": golden["name"],
+            }
+        else:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"GitHub API error: {response.text}"
+            )
+    except requests.RequestException as e:
+        raise HTTPException(status_code=502, detail=f"Failed to trigger CI: {str(e)}")
 
 # ── Dev entry point ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
