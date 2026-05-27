@@ -270,14 +270,8 @@ async def promote_healed(golden_id: str, body: dict):
     save_json(GOLDEN_DIR, golden_id, golden)
     return golden
 
-# ─ Trigger CI run ──────────────────────────────────────────────────────────────
-@app.post("/api/trigger-ci/{golden_id}")
-async def trigger_ci(golden_id: str):
-    """Trigger a GitHub Actions workflow for a specific golden test"""
-    golden = next((g for g in load_goldens() if g["id"] == golden_id), None)
-    if not golden:
-        raise HTTPException(status_code=404, detail="Golden not found")
-
+# ─ GitHub workflow dispatch helpers ─────────────────────────────────────────
+def get_github_config():
     gh_token = os.getenv("GITHUB_TOKEN")
     gh_owner = os.getenv("GITHUB_OWNER")
     gh_repo = os.getenv("GITHUB_REPO")
@@ -290,35 +284,68 @@ async def trigger_ci(golden_id: str):
             detail="GitHub credentials not configured in .env (GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO)"
         )
 
-    try:
-        url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/actions/workflows/{gh_workflow}/dispatches"
-        headers = {
-            "Authorization": f"token {gh_token}",
-            "Accept": "application/vnd.github.v3+json",
-        }
-        payload = {
-            "ref": gh_branch,
-            "inputs": {
-                "golden_name": golden["name"],
-                "golden_id": golden_id,
-            }
-        }
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
+    return gh_token, gh_owner, gh_repo, gh_workflow, gh_branch
 
-        if response.status_code == 204:
-            return {
-                "status": "success",
-                "message": f"CI workflow triggered for {golden['name']}",
-                "golden_id": golden_id,
-                "golden_name": golden["name"],
-            }
-        else:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"GitHub API error: {response.text}"
-            )
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"Failed to trigger CI: {str(e)}")
+
+def dispatch_github_workflow(inputs: dict):
+    gh_token, gh_owner, gh_repo, gh_workflow, gh_branch = get_github_config()
+    url = f"https://api.github.com/repos/{gh_owner}/{gh_repo}/actions/workflows/{gh_workflow}/dispatches"
+    headers = {
+        "Authorization": f"token {gh_token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    payload = {
+        "ref": gh_branch,
+        "inputs": inputs,
+    }
+    response = requests.post(url, json=payload, headers=headers, timeout=10)
+    if response.status_code == 204:
+        return {
+            "status": "success",
+            "message": "GitHub workflow dispatched",
+            "inputs": inputs,
+        }
+    raise HTTPException(
+        status_code=response.status_code,
+        detail=f"GitHub API error: {response.text}"
+    )
+
+
+# ─ Trigger CI run by golden ID ───────────────────────────────────────────────
+@app.post("/api/trigger-ci/{golden_id}")
+async def trigger_ci(golden_id: str):
+    """Trigger a GitHub Actions workflow for a specific golden test"""
+    golden = next((g for g in load_goldens() if g["id"] == golden_id), None)
+    if not golden:
+        raise HTTPException(status_code=404, detail="Golden not found")
+
+    gh_workflow = os.getenv("GITHUB_WORKFLOW", "playwright-test.yml")
+    if gh_workflow.endswith("playwright.yml"):
+        inputs = {"golden_ids": golden_id}
+    else:
+        inputs = {"golden_name": golden["name"], "golden_id": golden_id}
+
+    result = dispatch_github_workflow(inputs)
+    return {**result, "golden_id": golden_id, "golden_name": golden["name"]}
+
+
+# ─ Trigger CI run by golden_ids string ─────────────────────────────────────────
+@app.post("/api/trigger-ci")
+async def trigger_ci_ids(body: dict):
+    golden_ids_raw = body.get("golden_ids", "") if isinstance(body, dict) else ""
+    golden_ids = [gid.strip() for gid in golden_ids_raw.split(",") if gid.strip()]
+    if not golden_ids:
+        raise HTTPException(status_code=400, detail="Please provide one or more golden_ids")
+
+    known_ids = {g["id"] for g in load_goldens()}
+    invalid = [gid for gid in golden_ids if gid not in known_ids]
+    if invalid:
+        raise HTTPException(status_code=404, detail=f"Unknown golden IDs: {', '.join(invalid)}")
+
+    inputs = {"golden_ids": ",".join(golden_ids)}
+    result = dispatch_github_workflow(inputs)
+    return {**result, "golden_ids": golden_ids}
+
 
 # ── Dev entry point ───────────────────────────────────────────────────────────
 if __name__ == "__main__":

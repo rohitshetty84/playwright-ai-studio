@@ -271,6 +271,20 @@
         <div style="font-size:12px;color:var(--text2);font-family:'JetBrains Mono',monospace">
           Golden files are immutable references. Auto-healing only modifies them when explicitly triggered.
         </div>
+        <div class="card" style="margin-bottom:16px;padding:16px;">
+          <div class="card-title">▶ Dispatch GitHub workflow</div>
+          <div class="col" style="gap:10px;">
+            <div>
+              <label>Golden IDs</label>
+              <input id="ci-golden-ids" placeholder="seed-g1,4217f745" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px" />
+            </div>
+            <div class="row mt-12" style="justify-content:flex-start;gap:10px;">
+              <button class="btn btn-primary btn-sm" onclick="dispatchSelectedGoldens()">Run selected IDs</button>
+              <button class="btn btn-ghost btn-sm" onclick="document.getElementById('ci-golden-ids').value = STATE.goldens.map(g => g.id).join(',')">Fill all IDs</button>
+            </div>
+            <div style="font-size:12px;color:var(--text3);margin-top:8px;">Enter one or more golden IDs separated by commas. This dispatches the configured GitHub workflow with <code>golden_ids</code>.</div>
+          </div>
+        </div>
         <div id="golden-list"></div>
       </div>
 
@@ -703,6 +717,23 @@ async function runGoldenInCI(goldenId, goldenName) {
   } catch (e) {
     toast('✗ Failed to trigger CI: ' + e.message);
     console.error('CI trigger error:', e);
+  }
+}
+
+async function dispatchSelectedGoldens() {
+  const raw = document.getElementById('ci-golden-ids').value.trim();
+  if (!raw) {
+    toast('✗ Enter at least one golden ID to dispatch');
+    return;
+  }
+
+  try {
+    const response = await api('POST', '/trigger-ci', { golden_ids: raw });
+    toast('✓ GitHub workflow dispatched');
+    console.log('CI dispatched:', response);
+  } catch (e) {
+    toast('✗ Failed to dispatch workflow: ' + e.message);
+    console.error('CI dispatch error:', e);
   }
 }
 
