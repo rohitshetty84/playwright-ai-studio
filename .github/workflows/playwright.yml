@@ -15,7 +15,11 @@
 # Required repository **variables** (Settings → Secrets and variables → Actions → Variables tab):
 #   PLAYWRIGHT_AI_STUDIO_URL     (optional) e.g. https://studio.example.com
 #                                 — used as the gate for the report-runs job
-#   GOLDEN_ID                    (optional) defaults to seed-g1
+#   GOLDEN_IDS                   (optional) comma-separated golden IDs to run by default,
+#                                 e.g. "seed-g1,4217f745". Leave unset to run all.
+#                                 Overridden per-run by the workflow_dispatch input.
+#   GOLDEN_ID                    (optional) which golden to attribute the run to
+#                                 when POSTing to /api/runs. Defaults to seed-g1.
 #   BROWSER                      (optional) defaults to msedge
 #   AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_VERSION, AZURE_OPENAI_DEPLOYMENT
 #                                (optional, only for auto-heal jobs)
@@ -31,6 +35,11 @@ on:
   schedule:
     - cron: "0 2 * * *"      # nightly at 02:00 UTC
   workflow_dispatch:           # manual trigger from the Actions tab
+    inputs:
+      golden_ids:
+        description: 'Comma-separated golden IDs to run (leave blank = all). Example: seed-g1,4217f745'
+        required: false
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,7 +63,17 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Export golden JSON → tests/*.spec.ts
-        run: python ci/export_goldens.py --from golden --to tests
+        # Precedence: workflow_dispatch input > GOLDEN_IDS repo variable > "" (all)
+        env:
+          GOLDEN_IDS: ${{ github.event.inputs.golden_ids || vars.GOLDEN_IDS || '' }}
+        run: |
+          if [ -n "$GOLDEN_IDS" ]; then
+            echo "Selective run — IDs: $GOLDEN_IDS"
+            python ci/export_goldens.py --from golden --to tests --ids "$GOLDEN_IDS"
+          else
+            echo "No filter set — exporting every golden"
+            python ci/export_goldens.py --from golden --to tests
+          fi
 
       - name: List exported specs
         run: ls -la tests/

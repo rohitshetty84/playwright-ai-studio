@@ -108,6 +108,34 @@ The workflow already includes both:
 - **Schedule**: nightly at `0 2 * * *` UTC (edit the cron in the `on.schedule` block).
 - **Manual**: Actions tab → "Playwright AI Studio" workflow → **Run workflow** button (uses the `workflow_dispatch` trigger).
 
+### 5. Running only specific goldens
+
+By default the workflow runs **every** `*.json` file in `golden/`. To run a subset, there are two ways — pick whichever fits the situation.
+
+**Way A — one-shot from the UI (no commit needed)**
+
+Actions tab → "Playwright AI Studio" → **Run workflow** button → in the **"Comma-separated golden IDs"** text box, type the IDs you want:
+
+```
+seed-g1,4217f745
+```
+
+Click **Run workflow**. Only those goldens get materialized and tested. Useful for "I just changed one spec, only run that one."
+
+**Way B — standing default for every push/PR/scheduled run**
+
+Settings → Secrets and variables → Actions → **Variables** tab → New repository variable:
+
+| Name | Value |
+|------|-------|
+| `GOLDEN_IDS` | `seed-g1,4217f745` |
+
+Now every automatic run (push, PR, nightly cron) only runs that subset. Remove the variable to go back to "run all."
+
+**Precedence**: the workflow_dispatch input (Way A) wins if both are set, so you can override the standing default for a one-off run without touching settings.
+
+**How matching works**: an ID matches if it equals either the `id` field inside the golden JSON or the filename stem (they're usually the same). Matching is case-insensitive, and whitespace around commas is fine. Unknown IDs produce a `WARNING` in the job log but don't fail the run — so a typo is visible but not catastrophic.
+
 ---
 
 ## .env values (local dev)

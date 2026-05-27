@@ -7,6 +7,11 @@ source out to `tests/<safe-name>.spec.ts`.
 
 Usage (from .github/workflows/playwright.yml):
     python ci/export_goldens.py --from golden --to tests
+    python ci/export_goldens.py --from golden --to tests --ids "seed-g1,4217f745"
+
+When --ids is omitted (or empty), every golden in --from is exported.
+When --ids is provided, only goldens whose `id` field OR filename stem
+matches one of the given IDs are exported. Matching is case-insensitive.
 """
 
 from __future__ import annotations
@@ -29,20 +34,46 @@ def safe_filename(raw: str, fallback: str) -> str:
     return f"{name}.spec.ts"
 
 
-def export(src: Path, dst: Path) -> int:
+def parse_ids(raw: str | None) -> set[str]:
+    """Comma- or whitespace-separated string -> lowercase set of IDs."""
+    if not raw:
+        return set()
+    parts = re.split(r"[,\s]+", raw.strip())
+    return {p.lower() for p in parts if p}
+
+
+def export(src: Path, dst: Path, wanted_ids: set[str]) -> int:
     if not src.is_dir():
         print(f"[export_goldens] source dir not found: {src}", file=sys.stderr)
         return 1
 
     dst.mkdir(parents=True, exist_ok=True)
 
-    count = 0
+    if wanted_ids:
+        print(f"[export_goldens] filtering to IDs: {sorted(wanted_ids)}")
+    else:
+        print("[export_goldens] no --ids filter — exporting every golden")
+
+    exported = 0
+    skipped_filtered = 0
+    matched_ids: set[str] = set()
+
     for golden_file in sorted(src.glob("*.json")):
         try:
             data = json.loads(golden_file.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001
             print(f"[export_goldens] skip {golden_file.name}: {exc}", file=sys.stderr)
             continue
+
+        golden_id = (data.get("id") or "").lower()
+        stem_id = golden_file.stem.lower()
+
+        if wanted_ids and golden_id not in wanted_ids and stem_id not in wanted_ids:
+            print(f"[export_goldens] skip {golden_file.name}: id '{data.get('id', '?')}' not in --ids")
+            skipped_filtered += 1
+            continue
+
+        matched_ids.add(golden_id or stem_id)
 
         code = data.get("code")
         if not code:
@@ -53,13 +84,30 @@ def export(src: Path, dst: Path) -> int:
         out_path = dst / out_name
         out_path.write_text(code, encoding="utf-8")
         print(f"[export_goldens] {golden_file.name}  ->  {out_path}")
-        count += 1
+        exported += 1
 
-    if count == 0:
-        print("[export_goldens] no goldens exported — nothing to test", file=sys.stderr)
+    # Warn loudly if the user asked for IDs that don't exist on disk —
+    # otherwise this is silent and confusing.
+    unknown_ids = wanted_ids - matched_ids
+    if unknown_ids:
+        print(
+            f"[export_goldens] WARNING: requested ID(s) not found in {src}: "
+            f"{sorted(unknown_ids)}",
+            file=sys.stderr,
+        )
+
+    if exported == 0:
+        if wanted_ids:
+            print(
+                f"[export_goldens] no goldens matched the --ids filter "
+                f"({skipped_filtered} skipped) — nothing to test",
+                file=sys.stderr,
+            )
+        else:
+            print("[export_goldens] no goldens exported — nothing to test", file=sys.stderr)
         return 1
 
-    print(f"[export_goldens] {count} golden(s) exported to {dst}")
+    print(f"[export_goldens] {exported} golden(s) exported to {dst}")
     return 0
 
 
@@ -67,8 +115,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Export golden JSON -> .ts specs")
     parser.add_argument("--from", dest="src", default="golden", help="source directory of golden JSON files")
     parser.add_argument("--to", dest="dst", default="tests", help="destination directory for .spec.ts files")
+    parser.add_argument(
+        "--ids",
+        dest="ids",
+        default="",
+        help='Comma-separated list of golden IDs to include (e.g. "seed-g1,4217f745"). '
+             "Empty/omitted means export all.",
+    )
     args = parser.parse_args()
-    return export(Path(args.src), Path(args.dst))
+    return export(Path(args.src), Path(args.dst), parse_ids(args.ids))
 
 
 if __name__ == "__main__":
