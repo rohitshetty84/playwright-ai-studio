@@ -84,6 +84,7 @@ jobs:
         run: |
           if [ -d ci/fixtures ]; then
             cp -v ci/fixtures/* tests/
+            cp -v ci/fixtures/user.json .
           else
             echo "ci/fixtures/ not present — skipping fixture copy"
           fi
