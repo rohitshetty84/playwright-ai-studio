@@ -1,0 +1,121 @@
+{
+  "cookies": [
+    {
+      "name": "session-id",
+      "value": "144-8185125-2582609",
+      "domain": ".amazon.com",
+      "path": "/",
+      "expires": 1811479993.414098,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "session-id-time",
+      "value": "2082787201l",
+      "domain": ".amazon.com",
+      "path": "/",
+      "expires": 1811479993.414543,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "i18n-prefs",
+      "value": "SGD",
+      "domain": ".amazon.com",
+      "path": "/",
+      "expires": 1811479993.414579,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "lc-main",
+      "value": "en_US",
+      "domain": ".amazon.com",
+      "path": "/",
+      "expires": 1811479993.41461,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "sp-cdn",
+      "value": "\"L5Z9:SG\"",
+      "domain": ".amazon.com",
+      "path": "/",
+      "expires": 1811479994.414639,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "skin",
+      "value": "noskin",
+      "domain": ".amazon.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "ak_bmsc",
+      "value": "831561B87142952D1205E1457609921C~000000000000000000000000000000~YAAQxd6bfNR9H2KeAQAAV/TtbB8eGFeuTbofrp9ZJlZK9G25fKBss4fWTzFrMmP5nBC6EfSl8wJo0VupwPXmvU2KXnEIJ5dUYnmya/KhCWPasw5jZZnX3lGEkYx3f7LJfdw8RyBKkoVD8b3LNOmIvnScSsb0mevlmuts55ODzNbyMqHOq/IvkpmuByUOuFzucF8jOIspYsdAG8MvIa0FYyq3PjVjYMtbZABfKvC+7/UO1p9zjn4fJj+tz6iAVMe2JaXx42dIRe3oJgTSTiEzC0x2dAgUbnd91t74NGjBr3+5SgBNRVn5ueO5SB7EiTkZmLety8O54IukJ+6FvYmv9B43F19UqIhghYue3dM2KYM3tNFbcYaKyh+RTBLBENS6gfsbaOr2yDAP2CsVFi4HuyXHV2o1hRqjVLgojG5MJEW5MUYj1HML8e5SYHHdz9k+IYJ/mEzLHYvvqHTqynRZ131l33g94/1grWkwy6WCdHeffBnUxINv0X1MPGWe4FBaP1brRFjwMceIH80Q0TE=",
+      "domain": ".amazon.com",
+      "path": "/",
+      "expires": 1779951193.414685,
+      "httpOnly": true,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "bm_sv",
+      "value": "170795E83D1ABCEF04AAFA4AF31C30C4~YAAQxd6bfNV9H2KeAQAAV/TtbB/vGUcN3xtknV1mw0g/QaFfmR6iqzogCj68bgjznnNObKmGm3koQsn8yEoh0nawWrw6AjN0lt8W3rNxhzUk16F5U9ttn5XibEEI4wBUtVWikDO95DE/pC2IXrOzUa0a7z7MmzdpzAXJ3AC6svVbKY3vS47eEKXCVDDuheeiyCBSoOqMe65TBZHBT4LLa8SnqY1sYfxsbKcTLenL/PjIiwzMslsfrfPc0G6kF9eD~1",
+      "domain": ".amazon.com",
+      "path": "/",
+      "expires": 1779951194.414719,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "csm-hit",
+      "value": "tb:s-VSW074R49ZE18S2BBFWC|1779943994490&t:1779943994884&adb:adblk_no",
+      "domain": "www.amazon.com",
+      "path": "/",
+      "expires": 1810183994,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.amazon.com",
+      "localStorage": [
+        {
+          "name": "csm:adb",
+          "value": "adblk_no"
+        },
+        {
+          "name": "csm-hit",
+          "value": "tb:s-VSW074R49ZE18S2BBFWC|1779943994490&t:1779943994884&adb:adblk_no"
+        },
+        {
+          "name": "csa-tabbed-browsing",
+          "value": "{\"lastActive\":{\"visible\":true,\"pid\":\"7q5r23-mpol58-smeh0n-pxninc\",\"tid\":\"7q5r23-mpol58-smeh0n-pxninc\",\"ent\":{\"rid\":\"VSW074R49ZE18S2BBFWC\",\"ety\":\"Gateway\",\"esty\":\"desktop\"}},\"lastInteraction\":{},\"time\":1779943994805,\"initialized\":true}"
+        },
+        {
+          "name": "csa-ctoken-VSW074R49ZE18S2BBFWC",
+          "value": "1779947594804"
+        },
+        {
+          "name": "csm-bf",
+          "value": "[\"VSW074R49ZE18S2BBFWC\"]"
+        }
+      ]
+    }
+  ]
+}

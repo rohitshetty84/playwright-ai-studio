@@ -148,6 +148,8 @@
   .log-ok   { color: var(--pass-t); }
   .log-info { color: var(--text3); }
   .log-err  { color: var(--fail-t); }
+  .log-wait { color: var(--accent2); }
+  .log-warn { color: var(--warn-t); }
   .log-time { color: var(--text2); margin-right: 8px; }
 
   /* ── Toast ── */
@@ -340,7 +342,8 @@
             <div class="code-body"><pre id="heal-code-pre"></pre></div>
           </div>
           <div class="row mt-12">
-            <button class="btn btn-success" onclick="promoteHealed()">✓ Promote as New Golden</button>
+            <button class="btn btn-info" id="validate-btn" onclick="validateFix()" style="display:none">⚡ Validate Fix (Local)</button>
+            <button class="btn btn-success" id="promote-btn" onclick="promoteHealed()">✓ Promote as New Golden</button>
             <button class="btn btn-ghost btn-sm" onclick="resetHeal()">Discard</button>
           </div>
         </div>
@@ -603,24 +606,34 @@ async function runHeal() {
   const gid = document.getElementById('heal-golden-select').value;
   if (!gid) { toast('Select a golden file first.'); return; }
   STATE.healGoldenId = gid;
+  STATE.healAttempt = 0;  // Start fresh counter
+  STATE.maxHealAttempts = 4;  // Max 4 auto-heal iterations
 
   document.getElementById('heal-form').style.display = 'none';
   document.getElementById('heal-result').style.display = 'none';
   document.getElementById('heal-progress').style.display = '';
   document.getElementById('heal-log').innerHTML = '';
 
-  setProgress('heal-prog-bar', null, 10);
-  healLog('Starting auto-heal analysis…');
+  // Automatically start healing loop
+  await healAndValidateLoop(gid);
+}
+
+async function healAndValidateLoop(gid) {
+  STATE.healAttempt++;
+  const attempt = STATE.healAttempt;
+  const maxAttempts = STATE.maxHealAttempts;
+
+  healLog(`\n━━ Attempt ${attempt}/${maxAttempts} ━━`, 'log-info');
+  setProgress('heal-prog-bar', null, 10 + (attempt - 1) * 20);
 
   try {
+    healLog('🔧 Generating healed code with Azure OpenAI…');
     setProgress('heal-prog-bar', null, 35);
-    healLog('Sending failure context to Azure OpenAI…');
 
     const result = await api('POST', '/heal/' + gid);
     STATE.healCode = result.healedCode;
 
-    setProgress('heal-prog-bar', null, 80);
-    healLog('AI healing complete — building diff…');
+    healLog('✓ Healed code generated — analyzing changes…');
 
     // Changes list
     const changesEl = document.getElementById('heal-changes');
@@ -628,13 +641,97 @@ async function runHeal() {
 
     document.getElementById('heal-code-pre').innerHTML = highlight(result.healedCode);
 
-    setProgress('heal-prog-bar', null, 100);
-    healLog('✓ Auto-heal complete. Review and promote if satisfied.', 'log-ok');
+    setProgress('heal-prog-bar', null, 75);
+    healLog('🧪 Running validation locally…');
 
-    document.getElementById('heal-result').style.display = '';
+    // AUTOMATICALLY validate (no manual click needed)
+    await validateFixAuto(gid);
+
   } catch(e) {
-    healLog('⚠ Error: ' + e.message, 'log-err');
+    healLog('⚠ Healing error: ' + e.message, 'log-err');
     document.getElementById('heal-form').style.display = '';
+  }
+}
+
+async function validateFixAuto(gid) {
+  // Automatic validation during healing loop
+  const attempt = STATE.healAttempt;
+  const maxAttempts = STATE.maxHealAttempts;
+
+  try {
+    setProgress('heal-prog-bar', null, 85);
+
+    const result = await api('POST', '/heal-and-validate/' + gid);
+
+    setProgress('heal-prog-bar', null, 100);
+
+    if (result.testResult === 'PASS') {
+      healLog(`✅ VALIDATION PASSED in ${result.duration.toFixed(1)}s!`, 'log-ok');
+      healLog(`✓ Auto-heal succeeded on attempt ${attempt}/${maxAttempts}. Ready to promote.`, 'log-ok');
+
+      // Show promote button only on success
+      document.getElementById('validate-btn').style.display = 'none';
+      document.getElementById('promote-btn').style.display = '';
+      document.getElementById('heal-result').style.display = '';
+      return;
+    } else {
+      // Test failed
+      const errorMsg = result.error || 'Unknown error';
+      healLog(`❌ Validation failed: ${errorMsg}`, 'log-err');
+
+      if (attempt < maxAttempts) {
+        // Auto-retry with learning
+        healLog(`🔄 Learning from failure — attempting heal #${attempt + 1}…`, 'log-wait');
+        await new Promise(resolve => setTimeout(resolve, 1500));  // Brief pause between attempts
+        await healAndValidateLoop(gid);
+      } else {
+        // Max attempts reached - escalate to manual
+        healLog(`⚠️  Reached max auto-heal attempts (${maxAttempts}). Manual review needed.`, 'log-warn');
+        healLog(`Last error: ${errorMsg}`, 'log-err');
+
+        // Show manual intervention buttons
+        document.getElementById('validate-btn').style.display = '';
+        document.getElementById('validate-btn').textContent = '🔄 Validate Again';
+        document.getElementById('promote-btn').style.display = '';
+        document.getElementById('promote-btn').textContent = '✋ Manual Review';
+        document.getElementById('heal-result').style.display = '';
+      }
+    }
+  } catch(e) {
+    healLog('⚠ Validation error: ' + e.message, 'log-err');
+  }
+}
+
+async function validateFix() {
+  // Manual validation (user clicked button after auto-heal reached max attempts)
+  try {
+    const gid = STATE.healGoldenId;
+    if (!gid) { healLog('⚠ No golden selected', 'log-err'); return; }
+
+    healLog('🧪 Running manual validation…', 'log-wait');
+    document.getElementById('validate-btn').disabled = true;
+
+    const result = await api('POST', '/heal-and-validate/' + gid);
+
+    document.getElementById('validate-btn').disabled = false;
+
+    if (result.testResult === 'PASS') {
+      healLog(`✅ VALIDATION PASSED in ${result.duration.toFixed(1)}s!`, 'log-ok');
+      healLog('✓ Ready to promote to golden.', 'log-ok');
+      document.getElementById('validate-btn').style.display = 'none';
+      document.getElementById('promote-btn').style.display = '';
+      document.getElementById('promote-btn').textContent = '✓ Promote to Golden';
+    } else {
+      healLog(`❌ Test failed: ${result.error || 'Unknown error'}`, 'log-err');
+      healLog('Attempting another auto-heal cycle with learned context…', 'log-wait');
+
+      // Reset attempt counter and try again (restart the auto-heal loop)
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await healAndValidateLoop(gid);
+    }
+  } catch(e) {
+    document.getElementById('validate-btn').disabled = false;
+    healLog('⚠ Validation error: ' + e.message, 'log-err');
   }
 }
 

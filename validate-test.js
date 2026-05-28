@@ -1,0 +1,143 @@
+#!/usr/bin/env node
+/**
+ * Validate a Playwright test by copying to tests/ and running
+ *
+ * Usage: node validate-test.js <test-file-path>
+ * Output: JSON with { status, error, duration, passed }
+ */
+
+const { execFile } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const testFile = process.argv[2];
+
+if (!testFile) {
+  console.error(JSON.stringify({
+    status: 'ERROR',
+    error: 'Test file path required as argument',
+    duration: 0
+  }));
+  process.exit(1);
+}
+
+if (!fs.existsSync(testFile)) {
+  console.error(JSON.stringify({
+    status: 'ERROR',
+    error: `Test file not found: ${testFile}`,
+    duration: 0
+  }));
+  process.exit(1);
+}
+
+const startTime = Date.now();
+
+// Find the tests directory (should be in project root)
+const projectRoot = process.cwd();
+const testsDir = path.join(projectRoot, 'tests');
+
+// Create tests dir if it doesn't exist
+if (!fs.existsSync(testsDir)) {
+  fs.mkdirSync(testsDir, { recursive: true });
+}
+
+// Copy the test file to tests/validate-temp.spec.ts
+const tempTestName = 'validate-temp.spec.ts';
+const tempTestPath = path.join(testsDir, tempTestName);
+
+try {
+  const testContent = fs.readFileSync(testFile, 'utf-8');
+  fs.writeFileSync(tempTestPath, testContent);
+
+  console.log(`[validate] Copied ${testFile} to ${tempTestPath}`);
+
+  // Run playwright test
+  const args = ['playwright', 'test', tempTestName, '--reporter=json'];
+
+  // Set up environment to show browser during local validation
+  const env = Object.assign({}, process.env);
+  env.LOCAL_VALIDATION = 'true'; // Enable headless=false in config
+
+  console.log('[validate] Running with LOCAL_VALIDATION=true (browser will be visible)');
+
+  execFile('npx', args,
+    {
+      timeout: 65000,
+      cwd: projectRoot,
+      maxBuffer: 10 * 1024 * 1024,
+      env: env  // Pass environment with LOCAL_VALIDATION flag
+    },
+    (error, stdout, stderr) => {
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+      // Clean up temp file
+      try {
+        fs.unlinkSync(tempTestPath);
+        console.log(`[validate] Cleaned up ${tempTestPath}`);
+      } catch (e) {
+        console.log(`[validate] Warning: Could not delete temp file: ${e.message}`);
+      }
+
+      const passed = error === null || (error && error.code === 0);
+      const status = passed ? 'PASS' : 'FAIL';
+
+      let errorMessage = null;
+      let jsonOutput = null;
+
+      // Parse JSON output
+      try {
+        const lines = (stdout || '').split('\n');
+        const jsonLine = lines.find(line => line.trim().startsWith('{'));
+        if (jsonLine) {
+          jsonOutput = JSON.parse(jsonLine);
+        }
+      } catch (e) {
+        // JSON parse failed
+      }
+
+      // Extract error if test failed
+      if (!passed) {
+        if (jsonOutput?.suites?.[0]?.tests?.[0]?.error?.message) {
+          errorMessage = jsonOutput.suites[0].tests[0].error.message;
+        } else if (stderr && stderr.trim()) {
+          errorMessage = stderr.split('\n')[0].trim();
+        } else if (stdout && stdout.trim()) {
+          const errorMatch = stdout.match(/Error: (.+)/);
+          if (errorMatch) {
+            errorMessage = errorMatch[1];
+          } else {
+            const lines = stdout.split('\n').filter(l => l.trim() && !l.includes('Playwright'));
+            errorMessage = lines[0]?.trim() || 'Test failed without error message';
+          }
+        }
+      }
+
+      const result = {
+        status,
+        error: errorMessage,
+        duration: parseFloat(duration),
+        passed: passed,
+        timestamp: new Date().toISOString()
+      };
+
+      console.log(JSON.stringify(result));
+      process.exit(passed ? 0 : 1);
+    }
+  );
+
+} catch (err) {
+  const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+  // Clean up if error during setup
+  try {
+    fs.unlinkSync(tempTestPath);
+  } catch (e) {}
+
+  console.error(JSON.stringify({
+    status: 'ERROR',
+    error: `Setup error: ${err.message}`,
+    duration: parseFloat(duration),
+    passed: false
+  }));
+  process.exit(1);
+}

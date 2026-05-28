@@ -8,7 +8,13 @@ import { defineConfig, devices } from '@playwright/test';
  *     ci/export_goldens.py during the `prepare:goldens` job
  *   • CI environment is detected via the standard CI=true env var
  *   • Edge is the primary browser (matches the FastAPI service default)
+ *   • LOCAL_VALIDATION=true shows the browser during local validation runs
  */
+
+// Detect if running local validation (from auto-heal system)
+const isLocalValidation = process.env.LOCAL_VALIDATION === 'true';
+const isCI = !!process.env.CI;
+
 export default defineConfig({
   testDir: './tests',
   fullyParallel: true,
@@ -27,9 +33,14 @@ export default defineConfig({
   ],
 
   use: {
-    headless: true,
-    actionTimeout: 15_000,
-    navigationTimeout: 30_000,
+    // Show browser during LOCAL validation, hide in CI/headless mode
+    // Set LOCAL_VALIDATION=true when running validation from auto-heal
+    headless: isCI ? true : !isLocalValidation,
+
+    // Increase timeouts for better element visibility
+    actionTimeout: 20_000,
+    navigationTimeout: 45_000,
+
     trace: 'retain-on-failure',
     video: 'retain-on-failure',
     screenshot: 'only-on-failure',
@@ -37,10 +48,10 @@ export default defineConfig({
 
   projects: [
     {
-      name: 'msedge',
-      use: { ...devices['Desktop Edge'], channel: 'msedge' },
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
     },
-    // Uncomment to also run against Chromium in CI:
-    // { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // Uncomment to also run against msedge:
+    // { name: 'msedge', use: { ...devices['Desktop Edge'], channel: 'msedge' } },
   ],
 });

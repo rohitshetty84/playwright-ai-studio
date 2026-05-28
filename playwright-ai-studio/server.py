@@ -3,7 +3,7 @@ Playwright AI Studio — Python/FastAPI backend
 Azure OpenAI powered test synthesis & auto-healing
 """
 
-import os, json, uuid, re, subprocess
+import os, json, uuid, re, subprocess, tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -16,6 +16,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import AzureOpenAI
 from dotenv import load_dotenv
+
+# ── Import improved healing engine ─────────────────────────────────────────────
+from healing_engine import ErrorSignature, generate_targeted_healing_prompt, analyze_healing_history
 
 BASE = Path(__file__).parent
 ROOT_ENV = BASE.parent / ".env"
@@ -70,6 +73,9 @@ class PromoteGoldenRequest(BaseModel):
 
 class TriggerCIRequest(BaseModel):
     golden_ids: str  # comma-separated list of golden IDs
+
+class ValidateHealRequest(BaseModel):
+    golden_id: str
 # ── Azure OpenAI helper ───────────────────────────────────────────────────────
 def ask_llm(system: str, user: str, max_tokens: int = 1500) -> str:
     try:
@@ -163,6 +169,111 @@ def is_healing_stuck(golden_id: str) -> dict:
             }
 
     return {"stuck": False}
+
+# ── LOCAL VALIDATION: Run tests locally for instant feedback ──────────────────
+async def validate_test_locally(test_code: str, golden_id: str) -> dict:
+    """
+    Run a Playwright test locally and return results immediately.
+
+    This allows auto-heal to test fixes in seconds instead of waiting for GitHub Actions.
+
+    Args:
+        test_code: The TypeScript test code to validate
+        golden_id: The golden ID (for temp file naming)
+
+    Returns:
+        {
+            "status": "PASS" | "FAIL" | "ERROR",
+            "duration": 2.1,
+            "error": null or error message,
+            "passed": true | false
+        }
+    """
+    try:
+        # Create temp test file with TypeScript extension
+        # Use system temp directory (automatically created by OS)
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            suffix=f'_{golden_id}_validate.spec.ts',
+            delete=False
+        ) as f:
+            f.write(test_code)
+            temp_file = f.name
+
+        try:
+            # Call the Node.js validation script
+            root_project = BASE.parent  # Go up from playwright-ai-studio
+            validate_script = root_project / "validate-test.js"
+
+            if not validate_script.exists():
+                return {
+                    "status": "ERROR",
+                    "error": f"validate-test.js not found at {validate_script}",
+                    "duration": 0,
+                    "passed": False
+                }
+
+            # Verify temp file exists and is readable
+            temp_file_path = Path(temp_file)
+            if not temp_file_path.exists():
+                return {
+                    "status": "ERROR",
+                    "error": f"Temp file not found: {temp_file}",
+                    "duration": 0,
+                    "passed": False
+                }
+
+            print(f"[validation] Temp file created: {temp_file}")
+            print(f"[validation] File size: {temp_file_path.stat().st_size} bytes")
+            print(f"[validation] Running: node {validate_script} {temp_file}")
+
+            result = subprocess.run(
+                ['node', str(validate_script), temp_file],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=str(root_project)
+            )
+
+            print(f"[validation] Exit code: {result.returncode}")
+            print(f"[validation] Stdout: {result.stdout[:500]}")
+            if result.stderr:
+                print(f"[validation] Stderr: {result.stderr[:500]}")
+
+            # Parse JSON result
+            try:
+                output = json.loads(result.stdout)
+                return output
+            except json.JSONDecodeError as e:
+                # If JSON parsing fails, return the raw output as error
+                return {
+                    "status": "ERROR",
+                    "error": f"Failed to parse validation result: {result.stdout[:500]}",
+                    "duration": 0,
+                    "passed": False
+                }
+
+        finally:
+            # Clean up temp file
+            try:
+                Path(temp_file).unlink()
+            except Exception as cleanup_err:
+                print(f"[validation] Warning: Could not delete temp file {temp_file}: {cleanup_err}")
+
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "TIMEOUT",
+            "error": "Test validation timed out (>60 seconds)",
+            "duration": 60,
+            "passed": False
+        }
+    except Exception as e:
+        return {
+            "status": "ERROR",
+            "error": f"Validation error: {str(e)}",
+            "duration": 0,
+            "passed": False
+        }
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -391,6 +502,41 @@ Output ONLY the TypeScript code. No markdown."""
         max_tokens=1500,
     )
 
+    # Strip markdown fences if LLM wrapped code in them
+    healed_code = re.sub(r"```(?:typescript|ts|js)?[\n]?", "", healed_code).strip()
+
+    # CRITICAL FIX: Remove trailing [AI-HEAL] comments and junk after closing braces
+    # Azure OpenAI sometimes appends comments/summaries after code ends, breaking syntax
+    # Strategy: Remove everything after the last complete test block
+
+    # First, find and keep only up to the last closing });
+    lines = healed_code.split('\n')
+    kept_lines = []
+    found_closing = False
+
+    for i in range(len(lines) - 1, -1, -1):
+        line = lines[i]
+        # Look for the closing pattern of a test describe block: });
+        if not found_closing and '});' in line:
+            # Keep this line and everything before it
+            kept_lines = lines[:i+1]
+            found_closing = True
+            break
+
+    # If we found a proper closing, use it; otherwise use original
+    if found_closing:
+        healed_code = '\n'.join(kept_lines).rstrip()
+
+    # Additional safeguard: Remove any trailing lines that are [AI-HEAL] comments
+    while True:
+        lines = healed_code.split('\n')
+        last_line = lines[-1] if lines else ''
+        if re.match(r'^\s*(\*+\s*)?\[AI-HEAL\]', last_line):
+            lines.pop()
+            healed_code = '\n'.join(lines).rstrip()
+        else:
+            break
+
     print(f"[heal] Generated fix for golden {golden_id} (attempt #{len(healing_history) + 1})")
 
     # Generate a plain-English diff summary
@@ -405,6 +551,178 @@ Output ONLY the TypeScript code. No markdown."""
         changes = ["Applied .first() to ambiguous role selectors", "Added .or() fallback for Nudge button", "Added waitForLoadState after navigation"]
 
     return {"healedCode": healed_code, "changes": changes}
+
+# ─ NEW: Heal + Validate Locally (Instant Feedback) ───────────────────────────
+@app.post("/api/heal-and-validate/{golden_id}")
+async def heal_and_validate(golden_id: str):
+    """
+    NEW WORKFLOW: Generate healed code AND run it locally for instant feedback.
+
+    Instead of: Heal → Promote → Wait 5+ min for GitHub
+    Now: Heal → Validate locally (2-5 sec) → See pass/fail → Decide to promote
+
+    Returns:
+        {
+            "goldenId": "...",
+            "healedCode": "...",
+            "testResult": "PASS" | "FAIL" | "ERROR",
+            "duration": 2.1,
+            "error": null or error message,
+            "passed": true | false,
+            "readyToPromote": true | false,
+            "message": "✅ Test passed! Ready to promote." or error
+        }
+    """
+    golden = next((g for g in load_goldens() if g["id"] == golden_id), None)
+    if not golden:
+        raise HTTPException(status_code=404, detail="Golden not found")
+
+    try:
+        # Step 1: Collect errors and diagnose root cause
+        errors = []
+        latest_error = None
+        for run in load_runs():
+            if run.get("goldenId") == golden_id:
+                for c in run.get("candidates", []):
+                    if c.get("status") == "fail" and c.get("error"):
+                        errors.append(f"[{c['name']} Path {c['path']}] {c['error']}")
+                        latest_error = c.get("error")
+
+        error_summary = "\n".join(errors) if errors else "Selector timeout on dynamic elements."
+
+        healing_history = load_healing_history(golden_id)
+        learning_context = ""
+
+        # ── NEW: Diagnose root cause using ErrorSignature ──────────────────────
+        diagnosis = ErrorSignature.diagnose(latest_error or error_summary, golden["code"])
+        root_cause = diagnosis.get("root_cause", "UNKNOWN")
+        confidence = diagnosis.get("confidence", 0.0)
+
+        print(f"[heal-validate] Root cause diagnosis: {root_cause} (confidence: {confidence:.0%})")
+        print(f"[heal-validate] Evidence: {diagnosis.get('evidence', 'No evidence')}")
+
+        # ── Analyze healing history for patterns ──────────────────────────────
+        history_analysis = analyze_healing_history(healing_history)
+        if history_analysis.get("needs_manual_review"):
+            print(f"[heal-validate] ⚠️ Healing stuck - manual review recommended")
+
+        # Build learning context from history
+        if len(healing_history) > 0:
+            learning_context = f"""
+⚠️  LEARNING FROM PAST FAILURES (Attempt #{len(healing_history) + 1}):
+Previous attempts: {len(healing_history)}
+Root cause identified: {root_cause} (confidence: {confidence:.0%})
+
+Recent attempts:
+"""
+            for attempt in healing_history[-3:]:
+                learning_context += f"  - Attempt #{attempt.get('attemptNumber', '?')}: {attempt.get('rootCause', 'Unknown')}\n"
+
+            learning_context += f"""
+Strategy: Apply targeted fix for '{root_cause}' instead of generic selector fixes.
+"""
+
+        # ── Generate targeted healing prompt based on diagnosis ────────────────
+        system_prompt, user_prompt = generate_targeted_healing_prompt(
+            latest_error or error_summary,
+            golden["code"],
+            diagnosis,
+            learning_context
+        )
+
+        healed_code = ask_llm(
+            system=system_prompt,
+            user=user_prompt,
+            max_tokens=1500,
+        )
+
+        # Strip markdown fences if LLM wrapped code in them
+        healed_code = re.sub(r"```(?:typescript|ts|js)?[\n]?", "", healed_code).strip()
+
+        # CRITICAL FIX: Remove trailing [AI-HEAL] comments and junk after closing braces
+        # Azure OpenAI sometimes appends comments/summaries after code ends, breaking syntax
+        # Strategy: Remove everything after the last complete test block
+
+        # First, find and keep only up to the last closing });
+        lines = healed_code.split('\n')
+        kept_lines = []
+        found_closing = False
+
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i]
+            # Look for the closing pattern of a test describe block: });
+            if not found_closing and '});' in line:
+                # Keep this line and everything before it
+                kept_lines = lines[:i+1]
+                found_closing = True
+                break
+
+        # If we found a proper closing, use it; otherwise use original
+        if found_closing:
+            healed_code = '\n'.join(kept_lines).rstrip()
+
+        # Additional safeguard: Remove any trailing lines that are [AI-HEAL] comments
+        while True:
+            lines = healed_code.split('\n')
+            last_line = lines[-1] if lines else ''
+            if re.match(r'^\s*(\*+\s*)?\[AI-HEAL\]', last_line):
+                lines.pop()
+                healed_code = '\n'.join(lines).rstrip()
+            else:
+                break
+
+        print(f"[heal-validate] Generated targeted fix for '{root_cause}' (attempt #{len(healing_history) + 1})")
+
+        # Step 2: Run test locally
+        print(f"[heal-validate] Running test locally for golden {golden_id}...")
+        validation_result = await validate_test_locally(healed_code, golden_id)
+
+        # Step 3: Return result with code + pass/fail
+        response = {
+            "goldenId": golden_id,
+            "healedCode": healed_code,
+            "testResult": validation_result["status"],
+            "duration": validation_result.get("duration", 0),
+            "error": validation_result.get("error"),
+            "passed": validation_result.get("passed", False),
+            "readyToPromote": validation_result["status"] == "PASS",
+        }
+
+        # Step 4: Record healing attempt with diagnosis
+        save_healing_attempt(golden_id, {
+            "fix": f"Applied targeted fix for root cause: {root_cause}",
+            "rootCause": root_cause,
+            "confidence": confidence,
+            "error": latest_error or error_summary,
+            "succeeded": validation_result["status"] == "PASS",
+            "testResult": validation_result["status"],
+            "duration": validation_result.get("duration", 0),
+            "newError": validation_result.get("error") if validation_result["status"] != "PASS" else None
+        })
+
+        if validation_result["status"] == "PASS":
+            response["message"] = f"✅ Test PASSED in {validation_result.get('duration', 0):.1f}s! Ready to promote."
+            print(f"[heal-validate] ✅ LOCAL TEST PASSED for {golden_id}!")
+        else:
+            error_msg = validation_result.get("error", "Unknown error")
+            response["message"] = f"❌ Test FAILED: {error_msg}"
+            print(f"[heal-validate] ❌ LOCAL TEST FAILED for {golden_id}: {error_msg}")
+            response["diagnosis"] = {
+                "rootCause": root_cause,
+                "confidence": confidence,
+                "evidence": diagnosis.get("evidence")
+            }
+
+        return response
+
+    except Exception as e:
+        print(f"[heal-validate] Error: {str(e)}")
+        return {
+            "error": str(e),
+            "goldenId": golden_id,
+            "testResult": "ERROR",
+            "message": f"Validation error: {str(e)}"
+        }, 500
 
 # ─ Promote healed code as new Golden ─────────────────────────────────────────
 @app.patch("/api/goldens/{golden_id}/promote")
