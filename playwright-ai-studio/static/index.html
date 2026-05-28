@@ -640,10 +640,15 @@ async function runHeal() {
 
 async function promoteHealed() {
   try {
-    const updated = await api('PATCH', '/goldens/' + STATE.healGoldenId + '/promote', { code: STATE.healCode });
+    const response = await api('PATCH', '/goldens/' + STATE.healGoldenId + '/promote', { code: STATE.healCode });
     await fetchGoldens();
     renderNav();
-    toast('✓ Golden promoted — heal #' + updated.healCount);
+
+    // Extract heal count from response
+    const healCount = response.golden?.healCount || 0;
+    const workflowTriggered = response.workflowTriggered ? ' ✓ Workflow triggered' : '';
+    toast('✓ Golden promoted — heal #' + healCount + workflowTriggered);
+
     resetHeal();
     switchTab('golden');
   } catch(e) { toast('Error: ' + e.message); }
@@ -686,8 +691,37 @@ function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 
 function copyCode(preId) {
   const el = document.getElementById(preId);
-  navigator.clipboard?.writeText(el.textContent||'');
-  toast('Copied!');
+  // Extract plain text from pre element
+  const text = el.innerText || el.textContent || '';
+
+  // Try modern clipboard API first
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      toast('✓ Copied!');
+    }).catch(() => {
+      // If clipboard API fails, use fallback
+      copyCodeFallback(text);
+    });
+  } else {
+    // Use fallback for older browsers
+    copyCodeFallback(text);
+  }
+}
+
+function copyCodeFallback(text) {
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    toast('✓ Copied!');
+  } catch(e) {
+    toast('Could not copy');
+  }
 }
 
 function showError(id, msg) {
