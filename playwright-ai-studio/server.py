@@ -32,11 +32,13 @@ client = AzureOpenAI(
 DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 
 # ── Storage paths ─────────────────────────────────────────────────────────────
-BASE       = Path(__file__).parent
-GOLDEN_DIR = BASE / "golden"
-RUNS_DIR   = BASE / "runs"
+BASE           = Path(__file__).parent
+GOLDEN_DIR     = BASE / "golden"
+RUNS_DIR       = BASE / "runs"
+HEALING_DIR    = BASE / "healing_history"  # Track all healing attempts
 GOLDEN_DIR.mkdir(exist_ok=True)
 RUNS_DIR.mkdir(exist_ok=True)
+HEALING_DIR.mkdir(exist_ok=True)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Playwright AI Studio", version="1.0.0")
@@ -108,6 +110,59 @@ def save_json(directory: Path, id: str, data: dict):
 
 def ts_now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+# ── Healing History Helper Functions ──────────────────────────────────────────
+def load_healing_history(golden_id: str) -> list:
+    """Load all healing attempts for a golden"""
+    path = HEALING_DIR / f"{golden_id}_history.json"
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return []
+
+def save_healing_attempt(golden_id: str, attempt: dict):
+    """Save a healing attempt with metadata"""
+    history = load_healing_history(golden_id)
+    attempt["attemptNumber"] = len(history) + 1
+    attempt["timestamp"] = ts_now()
+    history.append(attempt)
+    save_json(HEALING_DIR, f"{golden_id}_history", history)
+    print(f"[healing] Recorded attempt #{attempt['attemptNumber']} for golden {golden_id}")
+
+def get_healing_failures_for_error(golden_id: str, error_msg: str) -> list:
+    """Get all failed healing attempts for a specific error"""
+    history = load_healing_history(golden_id)
+    return [h for h in history if h.get("error") == error_msg and not h.get("succeeded", True)]
+
+def is_healing_stuck(golden_id: str) -> dict:
+    """Check if healing has failed multiple times for same error"""
+    history = load_healing_history(golden_id)
+    if len(history) < 3:
+        return {"stuck": False}
+
+    # Group by error type
+    errors = {}
+    for h in history:
+        error = h.get("error", "unknown")
+        if error not in errors:
+            errors[error] = []
+        if not h.get("succeeded", True):
+            errors[error].append(h)
+
+    # Check if any error has 3+ failed attempts
+    for error, attempts in errors.items():
+        if len(attempts) >= 3:
+            return {
+                "stuck": True,
+                "error": error,
+                "failedAttempts": len(attempts),
+                "recommendation": "MANUAL_FIX_NEEDED",
+                "history": attempts
+            }
+
+    return {"stuck": False}
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -215,6 +270,55 @@ async def record_run(req: RunRequest):
     }
     save_json(RUNS_DIR, rid, run)
 
+    # ── NEW: Detect if this is a post-healing run and check if healing succeeded ──
+    if golden and golden.get("healCount", 0) > 0:
+        # This golden has been healed before
+        has_failures = any(c.get("status") == "fail" for c in req.candidates)
+        error_msg = None
+
+        if has_failures:
+            # Find the first error
+            for c in req.candidates:
+                if c.get("status") == "fail" and c.get("error"):
+                    error_msg = c.get("error")
+                    break
+
+            # Check if this is the same error as before
+            history = load_healing_history(req.golden_id)
+            if history:
+                last_attempt = history[-1]
+                if last_attempt.get("error") == error_msg:
+                    # HEALING FAILED - same error persists!
+                    save_healing_attempt(req.golden_id, {
+                        "fix": "Previous healing attempt",
+                        "error": error_msg,
+                        "succeeded": False,
+                        "result": "Same error persists after healing",
+                        "testResult": "FAIL"
+                    })
+                    print(f"[healing] ❌ HEALING FAILED for {req.golden_id}: Same error persists")
+                else:
+                    # Different error - healing helped with previous issue
+                    save_healing_attempt(req.golden_id, {
+                        "fix": "Previous healing attempt",
+                        "error": error_msg,
+                        "succeeded": False,
+                        "result": f"New error appeared: {error_msg}",
+                        "testResult": "FAIL"
+                    })
+                    print(f"[healing] ⚠️  New error for {req.golden_id}: {error_msg}")
+        else:
+            # All tests passed! Healing succeeded!
+            if history:
+                save_healing_attempt(req.golden_id, {
+                    "fix": "Previous healing attempt",
+                    "error": "NONE",
+                    "succeeded": True,
+                    "result": "All tests passed!",
+                    "testResult": "PASS"
+                })
+                print(f"[healing] ✅ HEALING SUCCEEDED for {req.golden_id}!")
+
     # Log for debugging
     status = "✓ recorded" if golden else "⚠ recorded (golden not found, using ID as name)"
     print(f"[api/runs] {status} — ID={rid}, golden={req.golden_id}, candidates={len(req.candidates)}")
@@ -230,27 +334,64 @@ async def heal(golden_id: str):
 
     # Collect errors from all runs for this golden
     errors = []
+    latest_error = None
     for run in load_runs():
         if run.get("goldenId") == golden_id:
             for c in run.get("candidates", []):
                 if c.get("status") == "fail" and c.get("error"):
                     errors.append(f"[{c['name']} Path {c['path']}] {c['error']}")
+                    latest_error = c.get("error")
 
     error_summary = "\n".join(errors) if errors else "Selector timeout on dynamic elements."
 
-    healed_code = ask_llm(
-        system="""You are a Playwright auto-healing expert.
+    # ── NEW: Check healing history and learn from failures ──────────────────
+    healing_history = load_healing_history(golden_id)
+    learning_context = ""
+
+    if latest_error and len(healing_history) > 0:
+        # Get previous failed attempts for this same error
+        failed_attempts = get_healing_failures_for_error(golden_id, latest_error)
+        if len(failed_attempts) > 0:
+            learning_context = f"""
+⚠️  LEARNING FROM PAST FAILURES:
+This error has been seen {len(failed_attempts)} time(s) before.
+
+Previous failed fixes:
+"""
+            for attempt in failed_attempts[-2:]:  # Show last 2 failures
+                learning_context += f"  - Attempt #{attempt['attemptNumber']}: {attempt.get('fix', 'Unknown fix')}\n"
+
+            learning_context += f"""
+DO NOT repeat these approaches. Instead, try a fundamentally different strategy.
+
+For "Locators must belong to the same frame" error:
+  ❌ DO NOT: Mix getByRole() with locator() in .or() chains
+  ❌ DO NOT: Chain selectors that operate in different frame contexts
+  ✅ DO: Use only page.locator() chains consistently
+  ✅ DO: Keep all locators within the same frame context
+  ✅ DO: Use .first() to disambiguate, not .or() for different selector types
+"""
+
+    system_prompt = """You are a Playwright auto-healing expert.
 Given failure error messages and the original golden TypeScript script, produce an improved script.
 For every fix, add an inline comment starting exactly with [AI-HEAL] explaining what changed and why.
 Key healing patterns:
-  - .or() for alternative selector chains
+  - Use only page.locator() chains to stay in same frame
   - .first() for ambiguous multi-match locators
   - waitForLoadState for timing gaps
   - try/catch with fallback click strategies
-Output ONLY the TypeScript code. No markdown.""",
-        user=f"Errors:\n{error_summary}\n\nOriginal golden script:\n{golden['code']}",
+
+CRITICAL: Avoid mixing different selector types (getByRole + locator) in same chain.
+All selectors in a chain must operate in the same frame context.
+Output ONLY the TypeScript code. No markdown."""
+
+    healed_code = ask_llm(
+        system=system_prompt,
+        user=f"""Errors:\n{error_summary}\n\nOriginal golden script:\n{golden['code']}{learning_context}""",
         max_tokens=1500,
     )
+
+    print(f"[heal] Generated fix for golden {golden_id} (attempt #{len(healing_history) + 1})")
 
     # Generate a plain-English diff summary
     diff_summary = ask_llm(
@@ -281,6 +422,17 @@ async def promote_healed(golden_id: str, body: PromoteGoldenRequest):
     golden["lastHealed"] = ts_now()
     save_json(GOLDEN_DIR, golden_id, golden)
 
+    # ── NEW: Save this healing attempt to history ──────────────────────────
+    # Find what the fix was by comparing code or using a marker
+    save_healing_attempt(golden_id, {
+        "fix": "Generated fix from Azure OpenAI",
+        "error": "TBD - will be confirmed when tests run",
+        "succeeded": None,  # Pending - will be updated when test runs
+        "result": "Promoted and awaiting test results",
+        "testResult": "PENDING"
+    })
+    print(f"[promote] Saved healing attempt #{golden.get('healCount')} for {golden_id}")
+
     # ── Auto-trigger GitHub Actions to test the healed golden ──────────────────
     # This ensures the healed code is tested with the updated golden file
     workflow_result = {"status": "skipped", "message": "GitHub workflow not configured"}
@@ -300,6 +452,30 @@ async def promote_healed(golden_id: str, body: PromoteGoldenRequest):
         "golden": golden,
         "workflowTriggered": workflow_result.get("status") == "success",
         "workflowMessage": workflow_result.get("message", "Unknown"),
+    }
+
+# ─ Check Healing Status & Escalation ────────────────────────────────────────
+@app.get("/api/goldens/{golden_id}/healing-status")
+async def get_healing_status(golden_id: str):
+    """Get healing history and check if escalation is needed"""
+    golden = next((g for g in load_goldens() if g["id"] == golden_id), None)
+    if not golden:
+        raise HTTPException(status_code=404, detail="Golden not found")
+
+    history = load_healing_history(golden_id)
+    stuck = is_healing_stuck(golden_id)
+
+    return {
+        "goldenId": golden_id,
+        "goldenName": golden.get("name"),
+        "healAttempts": len(history),
+        "healCount": golden.get("healCount", 0),
+        "lastHealed": golden.get("lastHealed"),
+        "isEscalated": stuck.get("stuck", False),
+        "escalationReason": stuck.get("error") if stuck.get("stuck") else None,
+        "failedAttempts": stuck.get("failedAttempts", 0),
+        "recommendation": stuck.get("recommendation", "CONTINUE_AUTO_HEALING"),
+        "recentHistory": history[-5:] if history else [],  # Last 5 attempts
     }
 
 # ─ GitHub workflow dispatch helpers ─────────────────────────────────────────
